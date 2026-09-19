@@ -1,0 +1,91 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ListRole {
+  ADMIN
+  MEMBER
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  ownedLists      List[]       @relation("ListOwner")
+  memberships     ListMember[]
+  createdTasks    Task[]       @relation("TaskCreatedBy")
+  lastEditedTasks Task[]       @relation("TaskLastEditedBy")
+  createdInvites  Invite[]     @relation("InviteCreatedBy")
+  acceptedInvites Invite[]     @relation("InviteAcceptedBy")
+}
+
+model List {
+  id        String   @id @default(uuid())
+  title     String
+  ownerId   String
+  owner     User     @relation("ListOwner", fields: [ownerId], references: [id])
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members ListMember[]
+  tasks   Task[]
+  invites Invite[]
+}
+
+model ListMember {
+  id        String   @id @default(uuid())
+  listId    String
+  userId    String
+  role      ListRole @default(MEMBER)
+  createdAt DateTime @default(now())
+
+  list List @relation(fields: [listId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([listId, userId])
+}
+
+model Task {
+  id             String    @id @default(uuid())
+  listId         String
+  title          String
+  completed      Boolean   @default(false)
+  position       String
+  createdById    String
+  lastEditedById String?
+  version        Int       @default(1)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  list         List  @relation(fields: [listId], references: [id], onDelete: Cascade)
+  createdBy    User  @relation("TaskCreatedBy", fields: [createdById], references: [id])
+  lastEditedBy User? @relation("TaskLastEditedBy", fields: [lastEditedById], references: [id])
+
+  @@index([listId])
+}
+
+model Invite {
+  id           String    @id @default(uuid())
+  token        String    @unique
+  listId       String
+  role         ListRole  @default(MEMBER)
+  createdById  String
+  expiresAt    DateTime?
+  revokedAt    DateTime?
+  lastUsedAt   DateTime?
+  lastUsedById String?
+  createdAt    DateTime  @default(now())
+
+  list         List  @relation(fields: [listId], references: [id], onDelete: Cascade)
+  createdBy    User  @relation("InviteCreatedBy", fields: [createdById], references: [id])
+  lastUsedBy   User? @relation("InviteAcceptedBy", fields: [lastUsedById], references: [id])
+}
