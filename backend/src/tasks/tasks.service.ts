@@ -63,58 +63,63 @@ export class TasksService {
   }
 
   // ---------------------------------------------------------------------
-  // Reorder idempotency (operationId)
+  // Operation idempotency (operationId)
   //
-  // A client may retry the same reorder request (e.g. it never saw the ack
-  // because of a dropped connection) without knowing whether the first
-  // attempt already applied. The result is recorded in Postgres, keyed by
-  // (userId, operationId), so a replay is deduped correctly no matter which
-  // backend instance handles it — process memory would only dedupe within
-  // one instance, which stopped being a safe assumption once the reorder
-  // lock itself became cross-instance.
+  // A client may retry the same mutation — e.g. it never saw the ack
+  // because of a dropped connection, or it's replaying its offline queue
+  // after a reconnect and doesn't know whether the operation already
+  // reached the server before it went offline. The result is recorded in
+  // Postgres, keyed by (userId, operationId), so a replay is deduped
+  // correctly no matter which backend instance handles it — process memory
+  // would only dedupe within one instance, which isn't a safe assumption
+  // once mutations can be served by any instance behind a load balancer.
   //
-  // The lookup-then-insert happens inside the same list-locked transaction
-  // as the mutation it guards, so the two are atomic together: a rolled
-  // back mutation can never leave behind a "successful" idempotency record,
-  // and a genuine concurrent replay (same operationId, same list) is
-  // serialized by the very same advisory lock, so the second one always
-  // observes the first one's already-committed record instead of racing
-  // past it. (A client that reuses an operationId across two *different*
-  // lists would defeat that serialization — that's a misbehaving client,
-  // not a case this guards against.)
+  // For `createTask` and `reorderTask`, the lookup-then-insert happens
+  // inside the same list-locked transaction as the mutation it guards, so
+  // the two are atomic together and a genuine concurrent replay is
+  // serialized by the advisory lock. `updateTask` and `deleteTask` check
+  // inside their own transaction but without a list-wide lock (they don't
+  // need one for correctness of the mutation itself, which is guarded by
+  // the atomic version-conditioned WHERE) — this leaves a narrow window
+  // where two *literally concurrent* replays of the same operationId could
+  // both race past the idempotency check and one gets a spurious conflict
+  // instead of the cached result. That's only reachable if a single client
+  // fires the same operationId twice in parallel, which a correctly
+  // implemented offline-queue replay (one in-flight operation at a time)
+  // never does.
   // ---------------------------------------------------------------------
-  private async findCachedReorder(
+  private async findCachedOperation<T>(
     client: Prisma.TransactionClient | PrismaService,
     userId: string,
     operationId: string,
-  ): Promise<TaskMutationResult | undefined> {
-    const record = await client.reorderIdempotencyRecord.findUnique({
+  ): Promise<T | undefined> {
+    const record = await client.operationIdempotencyRecord.findUnique({
       where: { userId_operationId: { userId, operationId } },
     });
     // Stored as JSON, so Date fields round-trip as ISO strings rather than
     // Date instances. Harmless here: the only consumer is the WS/REST layer,
     // which serializes to JSON for transport either way.
-    return record ? (record.result as unknown as TaskMutationResult) : undefined;
+    return record ? (record.result as unknown as T) : undefined;
   }
 
-  private async storeReorderResult(
+  private async storeOperationResult(
     tx: Prisma.TransactionClient,
     userId: string,
     operationId: string,
-    result: TaskMutationResult,
+    result: unknown,
   ): Promise<void> {
-    await tx.reorderIdempotencyRecord.create({
+    await tx.operationIdempotencyRecord.create({
       data: {
         userId,
         operationId,
-        result: result as unknown as Prisma.InputJsonValue,
+        result: result as Prisma.InputJsonValue,
       },
     });
 
     // Opportunistic cleanup: cheap, bounded, and only runs on a small
-    // fraction of writes so it doesn't add latency to every reorder.
+    // fraction of writes so it doesn't add latency to every mutation.
     if (Math.random() < 0.02) {
-      await tx.reorderIdempotencyRecord.deleteMany({
+      await tx.operationIdempotencyRecord.deleteMany({
         where: { createdAt: { lt: new Date(Date.now() - IDEMPOTENCY_RETENTION_MS) } },
       });
     }
@@ -166,11 +171,30 @@ export class TasksService {
     );
   }
 
-  async createTask(listId: string, userId: string, title: string): Promise<TaskMutationResult> {
+  async createTask(
+    listId: string,
+    userId: string,
+    title: string,
+    operationId?: string,
+  ): Promise<TaskMutationResult> {
     await this.membership.requireMembership(listId, userId);
+
+    if (operationId) {
+      const cached = await this.findCachedOperation<TaskMutationResult>(
+        this.prisma,
+        userId,
+        operationId,
+      );
+      if (cached) return cached;
+    }
 
     return this.prisma.$transaction(async (tx) => {
       await this.acquireListLock(tx, listId);
+
+      if (operationId) {
+        const cached = await this.findCachedOperation<TaskMutationResult>(tx, userId, operationId);
+        if (cached) return cached;
+      }
 
       const last = await tx.task.findFirst({
         where: { listId },
@@ -198,17 +222,32 @@ export class TasksService {
       });
 
       const listVersion = await this.bumpListVersion(tx, listId);
-      return { task, listVersion };
+      const result: TaskMutationResult = { task, listVersion };
+
+      if (operationId) {
+        await this.storeOperationResult(tx, userId, operationId, result);
+      }
+
+      return result;
     });
   }
 
   async updateTask(
     taskId: string,
     userId: string,
-    dto: { title?: string; completed?: boolean; baseVersion?: number },
+    dto: { title?: string; completed?: boolean; baseVersion?: number; operationId?: string },
   ): Promise<TaskMutationResult> {
     const existing = await this.loadTaskOrThrow(taskId);
     await this.membership.requireMembership(existing.listId, userId);
+
+    if (dto.operationId) {
+      const cached = await this.findCachedOperation<TaskMutationResult>(
+        this.prisma,
+        userId,
+        dto.operationId,
+      );
+      if (cached) return cached;
+    }
 
     if (dto.baseVersion !== undefined && dto.baseVersion !== existing.version) {
       throw new ConflictException({
@@ -231,6 +270,15 @@ export class TasksService {
     };
 
     return this.prisma.$transaction(async (tx) => {
+      if (dto.operationId) {
+        const cached = await this.findCachedOperation<TaskMutationResult>(
+          tx,
+          userId,
+          dto.operationId,
+        );
+        if (cached) return cached;
+      }
+
       // The check above is only a fast-path: a concurrent request could have
       // mutated the row in between. Re-run the version check as part of the
       // WHERE clause of the write itself so it's atomic — under Postgres
@@ -258,7 +306,13 @@ export class TasksService {
 
       const task = await tx.task.findUniqueOrThrow({ where: { id: taskId } });
       const listVersion = await this.bumpListVersion(tx, existing.listId);
-      return { task, listVersion };
+      const result: TaskMutationResult = { task, listVersion };
+
+      if (dto.operationId) {
+        await this.storeOperationResult(tx, userId, dto.operationId, result);
+      }
+
+      return result;
     });
   }
 
@@ -266,7 +320,22 @@ export class TasksService {
     taskId: string,
     userId: string,
     force: boolean,
+    operationId?: string,
   ): Promise<{ taskId: string; listId: string; listVersion: number }> {
+    // Checked before `loadTaskOrThrow`, unlike every other mutation: a
+    // successful delete's defining side effect is that the row is gone, so
+    // a replay of it (offline-queue or otherwise) hitting `loadTaskOrThrow`
+    // first would always 404 before ever reaching the cache and could never
+    // return its cached success — the one case idempotency exists for.
+    if (operationId) {
+      const cached = await this.findCachedOperation<{
+        taskId: string;
+        listId: string;
+        listVersion: number;
+      }>(this.prisma, userId, operationId);
+      if (cached) return cached;
+    }
+
     const task = await this.loadTaskOrThrow(taskId);
     const membership = await this.membership.requireMembership(task.listId, userId);
 
@@ -302,6 +371,15 @@ export class TasksService {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      if (operationId) {
+        const cached = await this.findCachedOperation<{
+          taskId: string;
+          listId: string;
+          listVersion: number;
+        }>(tx, userId, operationId);
+        if (cached) return cached;
+      }
+
       // Server-side re-check right before the actual delete: the checks
       // above ran against a read taken before the transaction, so a
       // concurrent change (task completed, task un-owned, task already
@@ -341,7 +419,13 @@ export class TasksService {
       }
 
       const listVersion = await this.bumpListVersion(tx, task.listId);
-      return { taskId, listId: task.listId, listVersion };
+      const result = { taskId, listId: task.listId, listVersion };
+
+      if (operationId) {
+        await this.storeOperationResult(tx, userId, operationId, result);
+      }
+
+      return result;
     });
   }
 
@@ -358,7 +442,11 @@ export class TasksService {
     // landing at nearly the same time) is still closed inside the
     // transaction below, after the lock is held.
     if (dto.operationId) {
-      const cached = await this.findCachedReorder(this.prisma, userId, dto.operationId);
+      const cached = await this.findCachedOperation<TaskMutationResult>(
+        this.prisma,
+        userId,
+        dto.operationId,
+      );
       if (cached) return cached;
     }
 
@@ -372,7 +460,11 @@ export class TasksService {
       await this.acquireListLock(tx, listId);
 
       if (dto.operationId) {
-        const cached = await this.findCachedReorder(tx, userId, dto.operationId);
+        const cached = await this.findCachedOperation<TaskMutationResult>(
+          tx,
+          userId,
+          dto.operationId,
+        );
         if (cached) return cached;
       }
 
@@ -459,7 +551,7 @@ export class TasksService {
       const result: TaskMutationResult = { task, listVersion };
 
       if (dto.operationId) {
-        await this.storeReorderResult(tx, userId, dto.operationId, result);
+        await this.storeOperationResult(tx, userId, dto.operationId, result);
       }
 
       return result;

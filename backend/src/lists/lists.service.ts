@@ -11,30 +11,41 @@ export class ListsService {
     private readonly membership: MembershipService,
   ) {}
 
-  async findAllForUser(userId: string) {
-    const memberships = await this.prisma.listMember.findMany({
-      where: { userId },
-      include: {
-        list: {
-          include: {
-            _count: { select: { members: true, tasks: true } },
+  async findAllForUser(userId: string, page = 1, pageSize = 20) {
+    const [memberships, total] = await Promise.all([
+      this.prisma.listMember.findMany({
+        where: { userId },
+        include: {
+          list: {
+            include: {
+              _count: { select: { members: true, tasks: true } },
+            },
           },
         },
-      },
-      orderBy: { list: { createdAt: 'asc' } },
-    });
+        orderBy: { list: { createdAt: 'asc' } },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.listMember.count({ where: { userId } }),
+    ]);
 
-    return memberships.map((m) => ({
-      id: m.list.id,
-      title: m.list.title,
-      ownerId: m.list.ownerId,
-      version: m.list.version,
-      createdAt: m.list.createdAt,
-      updatedAt: m.list.updatedAt,
-      role: m.role,
-      memberCount: m.list._count.members,
-      taskCount: m.list._count.tasks,
-    }));
+    return {
+      items: memberships.map((m) => ({
+        id: m.list.id,
+        title: m.list.title,
+        ownerId: m.list.ownerId,
+        version: m.list.version,
+        createdAt: m.list.createdAt,
+        updatedAt: m.list.updatedAt,
+        role: m.role,
+        memberCount: m.list._count.members,
+        taskCount: m.list._count.tasks,
+      })),
+      page,
+      pageSize,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    };
   }
 
   async createList(userId: string, title: string) {
@@ -116,7 +127,7 @@ export class ListsService {
       token: invite.token,
       role: invite.role,
       expiresAt: invite.expiresAt,
-      url: `${frontendUrl}/invites/${invite.token}/accept`,
+      url: `${frontendUrl}/invites/${invite.token}`,
     };
   }
 

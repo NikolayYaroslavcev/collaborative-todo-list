@@ -84,6 +84,9 @@
     },
     "collectCoverageFrom": ["**/*.(t|j)s"],
     "coverageDirectory": "../coverage",
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "setupFiles": ["<rootDir>/../test/jest-env-setup.ts"],
+    "testTimeout": 20000,
+    "transformIgnorePatterns": ["node_modules/(?!(fractional-indexing)/)"]
   }
 }

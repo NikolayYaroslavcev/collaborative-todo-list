@@ -1,10 +1,11 @@
-import { Body, Controller, Delete, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { AuthenticatedUser } from '../auth/types';
 import { ListsService } from './lists.service';
 import { CreateListDto } from './dto/create-list.dto';
 import { CreateInviteDto } from './dto/create-invite.dto';
+import { ListListsQueryDto } from './dto/list-lists-query.dto';
 
 @UseGuards(JwtAuthGuard)
 @Controller()
@@ -12,8 +13,8 @@ export class ListsController {
   constructor(private readonly listsService: ListsService) {}
 
   @Get('lists')
-  findAll(@CurrentUser() user: AuthenticatedUser) {
-    return this.listsService.findAllForUser(user.id);
+  findAll(@CurrentUser() user: AuthenticatedUser, @Query() query: ListListsQueryDto) {
+    return this.listsService.findAllForUser(user.id, query.page, query.pageSize);
   }
 
   @Post('lists')

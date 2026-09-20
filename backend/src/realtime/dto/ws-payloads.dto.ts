@@ -12,6 +12,14 @@ export class CreateTaskWsDto {
   @IsString()
   @Length(1, 500)
   title: string;
+
+  /** Client-generated idempotency key: replaying the same create (e.g. an
+   *  offline-queue replay after reconnect) returns the cached result
+   *  instead of creating a duplicate task. */
+  @IsOptional()
+  @IsString()
+  @Length(1, 100)
+  operationId?: string;
 }
 
 export class UpdateTaskWsDto {
@@ -31,6 +39,11 @@ export class UpdateTaskWsDto {
   @IsInt()
   @Min(1)
   baseVersion?: number;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 100)
+  operationId?: string;
 }
 
 export class DeleteTaskWsDto {
@@ -40,6 +53,11 @@ export class DeleteTaskWsDto {
   @IsOptional()
   @IsBoolean()
   force?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 100)
+  operationId?: string;
 }
 
 export class ReorderTaskWsDto {

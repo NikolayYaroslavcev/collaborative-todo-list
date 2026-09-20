@@ -1,0 +1,234 @@
+.composer {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.composer input {
+  flex: 1;
+}
+
+.list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.row {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  transition: border-color 0.15s var(--ease-out), box-shadow 0.15s var(--ease-out), opacity 0.15s var(--ease-out);
+}
+
+.row[data-dragging="true"] {
+  box-shadow: var(--shadow-lg);
+  z-index: 5;
+}
+
+.row[data-pending="true"] {
+  border-color: var(--color-warning);
+}
+
+.rowMain {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 10px var(--space-3);
+}
+
+.dragHandle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  margin: 0 -4px 0 -6px;
+  border-radius: var(--radius-sm);
+  background: none;
+  border: none;
+  color: var(--color-text-faint);
+  cursor: grab;
+  touch-action: none;
+  transition: background-color 0.15s var(--ease-out), color 0.15s var(--ease-out), transform 0.1s var(--ease-out);
+}
+
+.dragHandle:hover:not(:disabled) {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+.dragHandle:active:not(:disabled) {
+  cursor: grabbing;
+  transform: scale(0.92);
+}
+
+.dragHandle:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.checkbox {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--color-primary);
+  flex-shrink: 0;
+}
+
+.title {
+  flex: 1;
+  text-align: left;
+  background: none;
+  border: none;
+  font-size: 14px;
+  padding: 6px 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.title[data-completed="true"] {
+  color: var(--color-text-faint);
+  text-decoration: line-through;
+}
+
+.titleInput {
+  flex: 1;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-primary);
+  background: var(--color-surface);
+  font-size: 14px;
+  color: var(--color-text);
+  min-width: 0;
+}
+
+.titleInput:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--color-primary-soft);
+}
+
+.badges {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.badge {
+  font-size: 10px;
+  font-weight: 650;
+  padding: 3px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.badge[data-tone="pending"] {
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+}
+
+.badge[data-tone="editing"] {
+  background: var(--color-info-soft);
+  color: var(--color-info);
+}
+
+.deleteButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: none;
+  border: none;
+  color: var(--color-text-faint);
+  flex-shrink: 0;
+  transition: background-color 0.15s var(--ease-out), color 0.15s var(--ease-out), transform 0.1s var(--ease-out);
+}
+
+.deleteButton:hover {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.deleteButton:active {
+  transform: scale(0.92);
+}
+
+.section {
+  margin-bottom: var(--space-5);
+}
+
+.section:last-child {
+  margin-bottom: 0;
+}
+
+.sectionHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  font-size: 12px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+  background: none;
+  border: none;
+  text-align: left;
+  padding: 4px 0;
+  margin-bottom: var(--space-2);
+}
+
+button.sectionHead {
+  cursor: pointer;
+}
+
+button.sectionHead:hover {
+  color: var(--color-text);
+}
+
+.sectionCount {
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--color-text-faint);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 1px 7px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.sectionEmpty {
+  font-size: 13px;
+  color: var(--color-text-faint);
+  padding: var(--space-2) 0 0;
+}
+
+.sectionChevron {
+  margin-left: auto;
+  color: var(--color-text-faint);
+  transition: transform 0.15s var(--ease-out);
+}
+
+.sectionChevron:not([data-open="true"]) {
+  transform: rotate(-90deg);
+}
+
+.conflictBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 10px var(--space-3);
+  border-top: 1px solid var(--color-border);
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+  font-size: 12px;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+}

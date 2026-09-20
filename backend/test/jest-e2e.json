@@ -5,5 +5,8 @@
   "testRegex": ".e2e-spec.ts$",
   "transform": {
     "^.+\\.(t|j)s$": "ts-jest"
-  }
+  },
+  "setupFiles": ["<rootDir>/jest-env-setup.ts"],
+  "testTimeout": 30000,
+  "transformIgnorePatterns": ["node_modules/(?!(fractional-indexing)/)"]
 }

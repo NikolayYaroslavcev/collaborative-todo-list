@@ -260,10 +260,13 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayDisconnect {
         dto.listId,
         client.data.user.id,
         dto.title,
+        dto.operationId,
       );
-      this.server.to(listRoom(dto.listId)).emit('task:created', { task, listVersion });
+      this.server
+        .to(listRoom(dto.listId))
+        .emit('task:created', { task, listVersion, operationId: dto.operationId });
     } catch (error) {
-      this.handleError(client, 'task:create', error);
+      this.handleError(client, 'task:create', error, dto.operationId);
     }
   }
 
@@ -281,11 +284,14 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayDisconnect {
           title: dto.title,
           completed: dto.completed,
           baseVersion: dto.baseVersion,
+          operationId: dto.operationId,
         },
       );
-      this.server.to(listRoom(task.listId)).emit('task:updated', { task, listVersion });
+      this.server
+        .to(listRoom(task.listId))
+        .emit('task:updated', { task, listVersion, operationId: dto.operationId });
     } catch (error) {
-      this.handleError(client, 'task:update', error);
+      this.handleError(client, 'task:update', error, dto.operationId);
     }
   }
 
@@ -300,8 +306,11 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayDisconnect {
         dto.taskId,
         client.data.user.id,
         dto.force ?? false,
+        dto.operationId,
       );
-      this.server.to(listRoom(listId)).emit('task:deleted', { taskId, listVersion });
+      this.server
+        .to(listRoom(listId))
+        .emit('task:deleted', { taskId, listVersion, operationId: dto.operationId });
 
       // Don't leave a stale "being edited" badge pointing at a task that no
       // longer exists. Capture who was editing before clearing it, so any
@@ -315,7 +324,7 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayDisconnect {
         this.broadcastPresence(listId);
       }
     } catch (error) {
-      this.handleError(client, 'task:delete', error);
+      this.handleError(client, 'task:delete', error, dto.operationId);
     }
   }
 
@@ -336,20 +345,26 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayDisconnect {
           operationId: dto.operationId,
         },
       );
-      this.server.to(listRoom(task.listId)).emit('task:reordered', { task, listVersion });
+      this.server
+        .to(listRoom(task.listId))
+        .emit('task:reordered', { task, listVersion, operationId: dto.operationId });
     } catch (error) {
-      this.handleError(client, 'task:reorder', error);
+      this.handleError(client, 'task:reorder', error, dto.operationId);
     }
   }
 
-  private handleError(client: Socket, event: string, error: unknown) {
+  /** `operationId` (when the failed request carried one) is echoed back on
+   *  every branch so a client replaying its offline queue — or awaiting the
+   *  ack of a request it just sent — can match the error to the specific
+   *  pending operation instead of guessing from event name/timing alone. */
+  private handleError(client: Socket, event: string, error: unknown, operationId?: string) {
     if (error instanceof HttpException) {
       const status = error.getStatus();
       const response = error.getResponse();
       const payload = typeof response === 'string' ? { message: response } : response;
 
       if (status === HttpStatus.CONFLICT) {
-        client.emit('task:conflict', { event, ...payload });
+        client.emit('task:conflict', { event, operationId, ...payload });
         return;
       }
 
@@ -358,15 +373,15 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayDisconnect {
       // the user confirms, resend the same request with `force: true`.
       const reasons = (payload as { reasons?: string[] }).reasons;
       if (status === HttpStatus.BAD_REQUEST && reasons?.includes('BEING_EDITED')) {
-        client.emit('conflict:warning', { event, ...payload });
+        client.emit('conflict:warning', { event, operationId, ...payload });
         return;
       }
 
-      client.emit('error', { event, status, ...payload });
+      client.emit('error', { event, status, operationId, ...payload });
       return;
     }
 
     this.logger.error(`Unexpected WS error on ${event}: ${(error as Error).message}`);
-    client.emit('error', { event, message: 'Internal server error' });
+    client.emit('error', { event, operationId, message: 'Internal server error' });
   }
 }
