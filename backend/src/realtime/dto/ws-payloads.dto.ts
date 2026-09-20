@@ -58,4 +58,27 @@ export class ReorderTaskWsDto {
   @IsInt()
   @Min(1)
   baseVersion?: number;
+
+  /** Client-generated idempotency key: replaying the same reorder (e.g. after
+   *  a missed ack) returns the cached result instead of re-applying it. */
+  @IsOptional()
+  @IsString()
+  @Length(1, 100)
+  operationId?: string;
+}
+
+export class EditingStartDto {
+  @IsString()
+  listId: string;
+
+  @IsString()
+  taskId: string;
+}
+
+export class EditingStopDto {
+  @IsString()
+  listId: string;
+
+  @IsString()
+  taskId: string;
 }

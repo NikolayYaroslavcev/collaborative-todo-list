@@ -73,6 +73,20 @@ model Task {
   @@index([listId])
 }
 
+/// Durable idempotency record for `task:reorder` operations, keyed by the
+/// client-supplied operationId. Living in Postgres (not process memory)
+/// means a replayed request is deduped correctly regardless of which
+/// backend instance handles it — required once reorder locking itself
+/// moved to a Postgres advisory lock instead of an in-process mutex.
+model ReorderIdempotencyRecord {
+  userId      String
+  operationId String
+  result      Json
+  createdAt   DateTime @default(now())
+
+  @@id([userId, operationId])
+}
+
 model Invite {
   id           String    @id @default(uuid())
   token        String    @unique

@@ -3,10 +3,9 @@ import { AuthModule } from '../auth/auth.module';
 import { ListsModule } from '../lists/lists.module';
 import { TasksModule } from '../tasks/tasks.module';
 import { RealtimeGateway } from './realtime.gateway';
-import { PresenceService } from './presence.service';
 
 @Module({
   imports: [AuthModule, ListsModule, TasksModule],
-  providers: [RealtimeGateway, PresenceService],
+  providers: [RealtimeGateway],
 })
 export class RealtimeModule {}
