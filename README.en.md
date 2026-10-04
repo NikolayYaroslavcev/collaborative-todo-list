@@ -296,22 +296,3 @@ in as the two seeded users: create, update, delete and reorder a task in one and
 in the other; edit the same task from both at once to see the conflict banner; drag-reorder from
 both at once; go offline in one tab (dev tools → offline), make changes, and reconnect to see the
 queue replay.
-
-## Known limitations
-
-If a task is created while offline, the create succeeds server-side, and then the client edits
-that same task again before the connection round-trip completes and it learns the create already
-landed, that second edit can be lost. The cached idempotent replay returns the original create's
-result, not a merged one. This requires a specific partial-connectivity timing window and doesn't
-occur in the common fully-offline-then-reconnect case.
-
-Invite creation issues a shareable link rather than sending an email; there is no mail-sending
-integration in this project.
-
-## Future improvements
-
-- Send invite links by email instead of requiring them to be copied and shared manually.
-- Move presence from a single gateway process's memory to a shared store (e.g. Redis) if the
-  backend needs to run as more than one instance. REST and DB-backed writes already scale across
-  instances via the Postgres advisory lock and idempotency table, but in-memory presence
-  currently does not.
