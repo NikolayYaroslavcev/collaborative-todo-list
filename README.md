@@ -1,43 +1,44 @@
 # Collaborative Todo List
+**Русский** · [English](README.en.md)
 
-A realtime, multi-user todo list. Multiple people work on the same list at once: task changes,
-presence, drag-and-drop reordering and delete/edit conflicts all sync live over WebSockets, with
-the server as the single source of truth and an offline queue on the client for connectivity gaps.
+Todo-список с совместной работой в реальном времени. Несколько человек работают с одним списком одновременно: изменения задач, присутствие, перестановка перетаскиванием и конфликты удаления и редактирования синхронизируются по WebSocket. Сервер остаётся единственным источником истины, а на клиенте есть офлайн-очередь на случай пропадания связи.
 
-## Highlights
+![Collaborative Todo List](docs/screenshot.png)
 
-- **Server is the single source of truth.** Every mutation, on REST or WebSocket, runs
-  `validate → business rules → DB transaction → broadcast`; nothing is broadcast on an in-memory
-  guess before the write actually lands in Postgres. See [Architecture](#architecture).
-- **Concurrent edits are resolved by server-ordered optimistic concurrency**, not client
-  timestamps: a single conditional `UPDATE ... WHERE version = ?` decides the winner atomically,
-  and every other write against that same stale version gets back a `VERSION_CONFLICT`. See
-  [Concurrent edit](#concurrent-edit).
-- **Concurrent reordering is race-safe**: task positions are fractional-index strings (no
-  renumbering on insert), and a Postgres advisory lock serializes reorders on the same list across
-  any number of backend instances. See [Concurrent reorder](#concurrent-reorder).
-- **Offline queue and idempotency**: every mutation carries a client-generated `operationId`;
-  replays, whether from the offline queue or a dropped-ack retry, are deduped against a durable
-  Postgres record, not process memory. See [Idempotency](#idempotency).
-- **Permissions are enforced server-side** on every REST and WebSocket entry point (list
-  membership, admin vs member, completed-task rules), never just hidden in the UI. See
-  [Permissions](#permissions).
+## Основное
 
-## Features
+- **Сервер как единственный источник истины.** Каждая мутация, будь то REST или WebSocket, проходит цепочку
+  `validate → business rules → DB transaction → broadcast`; ничего не рассылается на основании догадки в памяти,
+  пока запись реально не попала в Postgres. См. [Архитектура](#архитектура).
+- **Конкурентные правки разрешаются через оптимистичную блокировку с порядком, который задаёт сервер**, а не
+  через клиентские метки времени: один условный `UPDATE ... WHERE version = ?` атомарно определяет победителя,
+  а все остальные записи с той же устаревшей версией получают `VERSION_CONFLICT`. См.
+  [Одновременное редактирование](#одновременное-редактирование).
+- **Одновременная перестановка защищена от гонок**: позиции задач хранятся как строки fractional index (при вставке
+  ничего не нужно перенумеровывать), а advisory-блокировка Postgres сериализует перестановки в одном списке при
+  любом числе экземпляров backend. См. [Одновременная перестановка](#одновременная-перестановка).
+- **Офлайн-очередь и идемпотентность**: каждая мутация несёт сгенерированный клиентом `operationId`; повторы,
+  будь то из офлайн-очереди или повторная отправка после потерянного ack, дедуплицируются по долговечной записи
+  в Postgres, а не по памяти процесса. См. [Идемпотентность](#идемпотентность).
+- **Права проверяются на сервере** в каждой точке входа REST и WebSocket (членство в списке, админ или участник,
+  правила для завершённых задач), а не просто скрываются в интерфейсе. См.
+  [Права доступа](#права-доступа).
 
-- Email/password auth with JWT, shared between the REST API and the WebSocket handshake.
-- Lists with an owner/admin and invited members; invite links with an optional role and expiry.
-- Realtime task CRUD and drag-and-drop reordering, synced to every connected member of a list.
-- Presence: who's online, and who is currently editing which task.
-- Conflict handling for concurrent edits, concurrent reorders, and delete-vs-edit races.
-- An offline queue on the client that replays queued mutations, in order, on reconnect.
+## Возможности
 
-## Tech stack
+- Аутентификация по email и паролю с JWT, общая для REST API и WebSocket-рукопожатия.
+- Списки с владельцем/админом и приглашёнными участниками; ссылки-приглашения с необязательной ролью и сроком действия.
+- CRUD задач в реальном времени и перестановка перетаскиванием, синхронизируемые со всеми подключёнными участниками списка.
+- Присутствие: кто онлайн и кто сейчас редактирует какую задачу.
+- Обработка конфликтов при одновременных правках, одновременных перестановках и гонках удаления и редактирования.
+- Офлайн-очередь на клиенте, которая при переподключении по порядку воспроизводит накопленные мутации.
+
+## Технологический стек
 
 - **Backend:** NestJS, Prisma, PostgreSQL, Socket.IO, JWT (Passport)
 - **Frontend:** Next.js (App Router), React, TypeScript, Socket.IO client, dnd-kit
 
-## Project structure
+## Структура проекта
 
 ```
 /backend             NestJS API + WebSocket gateway
@@ -45,41 +46,41 @@ the server as the single source of truth and an offline queue on the client for 
 /docker-compose.yml   PostgreSQL for local dev
 ```
 
-## Architecture
+## Архитектура
 
-The backend is a single NestJS app exposing both a REST API and a Socket.IO gateway on the same
-port. They share the same services, Prisma client, and JWT verification, so there is exactly one
-implementation of every business rule regardless of which transport a client used to trigger it.
+Backend это одно приложение NestJS, которое отдаёт и REST API, и Socket.IO gateway на одном порту. У них общие
+сервисы, клиент Prisma и проверка JWT, поэтому у каждого бизнес-правила ровно одна реализация, независимо от
+того, через какой транспорт клиент его вызвал.
 
-- `auth/`: login, JWT issuing/verification (`JwtAuthGuard` for REST, a Socket.IO `server.use`
-  middleware for WebSocket handshakes).
-- `lists/`: list CRUD, invites.
-- `tasks/`: task CRUD, reordering, conflict/idempotency logic. `TasksService` is where most of
-  the concurrency handling described below lives.
-- `common/`: cross-cutting services, namely list membership checks (`MembershipService`) and
-  in-memory presence (`PresenceService`).
-- `realtime/`: the Socket.IO gateway. It wires WS events to the same `TasksService`/`ListsService`
-  used by REST, and broadcasts the results.
-- `prisma/`: schema and migrations. PostgreSQL is the single source of truth for everything
-  except presence (see [Presence](#presence)).
+- `auth/`: вход, выпуск и проверка JWT (`JwtAuthGuard` для REST, middleware `server.use` в Socket.IO для
+  WebSocket-рукопожатий).
+- `lists/`: CRUD списков, приглашения.
+- `tasks/`: CRUD задач, перестановка, логика конфликтов и идемпотентности. Большая часть описанной ниже работы
+  с конкурентностью находится в `TasksService`.
+- `common/`: сквозные сервисы, а именно проверки членства в списке (`MembershipService`) и присутствие в памяти
+  (`PresenceService`).
+- `realtime/`: Socket.IO gateway. Он связывает WS-события с теми же `TasksService`/`ListsService`, что
+  используются в REST, и рассылает результаты.
+- `prisma/`: схема и миграции. PostgreSQL является единственным источником истины для всего, кроме присутствия
+  (см. [Присутствие](#присутствие)).
 
-Frontend: a Next.js App Router app (`/login`, `/lists`, `/lists/[id]`, `/invites/[token]`) backed
-by a single WebSocket connection per open list (`use-list-realtime.ts`), a REST client for auth
-and list management (`lib/api.ts`), and a persisted offline queue (`lib/offline-queue.ts`).
+Frontend: приложение на Next.js App Router (`/login`, `/lists`, `/lists/[id]`, `/invites/[token]`) с одним
+WebSocket-соединением на каждый открытый список (`use-list-realtime.ts`), REST-клиентом для аутентификации и
+управления списками (`lib/api.ts`) и сохраняемой офлайн-очередью (`lib/offline-queue.ts`).
 
-## Data model
+## Модель данных
 
-`User`, `List`, `ListMember` (role `ADMIN`/`MEMBER`), `Task`, `Invite`,
-`OperationIdempotencyRecord`. See `backend/prisma/schema.prisma`.
+`User`, `List`, `ListMember` (роль `ADMIN`/`MEMBER`), `Task`, `Invite`,
+`OperationIdempotencyRecord`. См. `backend/prisma/schema.prisma`.
 
-`Task.position` is a fractional-index string (via the `fractional-indexing` package) rather than
-an integer, so inserting a task between two neighbors never requires reindexing every other row.
-That matters once two clients can reorder the same list at the same time (see
-[Concurrent reorder](#concurrent-reorder)).
+`Task.position` это строка fractional index (пакет `fractional-indexing`), а не целое число, поэтому вставка
+задачи между двумя соседями никогда не требует переиндексации остальных строк. Это важно, когда два клиента
+могут одновременно переставлять задачи в одном списке (см.
+[Одновременная перестановка](#одновременная-перестановка)).
 
-## Running locally
+## Локальный запуск
 
-1. Start PostgreSQL:
+1. Запустите PostgreSQL:
    ```
    docker compose up -d postgres
    ```
@@ -92,7 +93,7 @@ That matters once two clients can reorder the same list at the same time (see
    npm run prisma:seed      # creates demo users + demo list
    npm run start:dev
    ```
-   API and WebSocket gateway listen on `http://localhost:3001`.
+   API и WebSocket gateway слушают `http://localhost:3001`.
 3. Frontend:
    ```
    cd frontend
@@ -100,161 +101,161 @@ That matters once two clients can reorder the same list at the same time (see
    cp .env.local.example .env.local
    npm run dev
    ```
-   App listens on `http://localhost:3000`. Sign in with either seeded account below; the flow
-   goes login → lists → a list's tasks, with realtime updates, presence, drag-and-drop reorder,
-   offline queueing and conflict handling all live.
+   Приложение слушает `http://localhost:3000`. Войдите под любым из тестовых аккаунтов ниже; путь такой:
+   вход → списки → задачи списка, при этом работают обновления в реальном времени, присутствие, перестановка
+   перетаскиванием, офлайн-очередь и обработка конфликтов.
 
-## Test users
+## Тестовые пользователи
 
-Seeded by `backend/prisma/seed.ts`:
+Создаются в `backend/prisma/seed.ts`:
 
-| Email | Password | Role on "Demo List" |
+| Email | Пароль | Роль в "Demo List" |
 | --- | --- | --- |
-| admin@example.com | password123 | ADMIN (owner) |
+| admin@example.com | password123 | ADMIN (владелец) |
 | member@example.com | password123 | MEMBER |
 
 ## API
 
-- `POST /auth/login`: returns `{ accessToken, user }`
-- `GET /auth/me`: protected, returns the current user
+- `POST /auth/login`: возвращает `{ accessToken, user }`
+- `GET /auth/me`: защищённый, возвращает текущего пользователя
 - `GET /lists` / `POST /lists` / `GET /lists/:id` / `DELETE /lists/:id`
-- `POST /lists/:id/invite` (admin only): creates an invite token/link (no email is sent)
+- `POST /lists/:id/invite` (только админ): создаёт токен или ссылку-приглашение (письмо не отправляется)
 - `POST /invites/:token/accept`
 - `GET /lists/:listId/tasks` / `POST /lists/:listId/tasks`
-- `PATCH /tasks/:id`: body may include `baseVersion` for optimistic-concurrency checks
-- `DELETE /tasks/:id?force=true`: `force` is required to delete a completed task, and only an
-  admin may do so
+- `PATCH /tasks/:id`: в теле может быть `baseVersion` для проверки оптимистичной конкурентности
+- `DELETE /tasks/:id?force=true`: `force` обязателен для удаления завершённой задачи, и это может сделать
+  только админ
 
-All endpoints except `/auth/login` require `Authorization: Bearer <jwt>` and enforce list
-membership server-side.
+Все эндпоинты, кроме `/auth/login`, требуют `Authorization: Bearer <jwt>` и проверяют членство в списке на
+сервере.
 
-## WebSocket protocol
+## Протокол WebSocket
 
-Clients connect to the default Socket.IO namespace with the JWT in the handshake
-(`io(url, { auth: { token } })`). Authentication runs as server-side middleware, so a missing or
-invalid token rejects the handshake itself rather than connecting and then disconnecting.
+Клиенты подключаются к стандартному пространству имён Socket.IO, передавая JWT в рукопожатии
+(`io(url, { auth: { token } })`). Аутентификация выполняется как серверный middleware, поэтому отсутствующий
+или недействительный токен отклоняет само рукопожатие, а не подключает клиента, чтобы потом отключить.
 
-Client → server: `list:join`, `list:leave`, `task:create`, `task:update`, `task:delete`,
-`task:reorder`, `presence:editing:start` / `presence:editing:stop`. Every mutation accepts an
-optional `operationId` (see [Idempotency](#idempotency)); `task:update` and `task:reorder` also
-accept `baseVersion` for the conflict check described below.
+Клиент → сервер: `list:join`, `list:leave`, `task:create`, `task:update`, `task:delete`,
+`task:reorder`, `presence:editing:start` / `presence:editing:stop`. Каждая мутация принимает необязательный
+`operationId` (см. [Идемпотентность](#идемпотентность)); `task:update` и `task:reorder` также принимают
+`baseVersion` для проверки конфликтов, описанной ниже.
 
-Server → client: `list:sync` (full state, sent on join and re-requested on every reconnect),
-`presence:update`, `task:created` / `task:updated` / `task:deleted` / `task:reordered`
-(broadcast to the room), and `task:conflict` / `conflict:warning` / `error` (sent only to the
-requester, for version conflicts, delete confirmations, and other failures respectively).
+Сервер → клиент: `list:sync` (полное состояние, отправляется при входе в список и запрашивается заново при каждом
+переподключении), `presence:update`, `task:created` / `task:updated` / `task:deleted` / `task:reordered`
+(рассылаются всей комнате), а также `task:conflict` / `conflict:warning` / `error` (отправляются только
+инициатору запроса: для конфликтов версий, подтверждений удаления и прочих ошибок соответственно).
 
-`List.version` and `Task.version` are incremented on every change and are what the conflict
-handling below is built on.
+`List.version` и `Task.version` увеличиваются при каждом изменении, и именно на них построена описанная ниже
+обработка конфликтов.
 
-## Presence
+## Присутствие
 
-Presence is intentionally not stored in PostgreSQL. It lives only in the gateway's process
-memory, keyed `listId → userId → { online, editingTaskId }`. It's inherently ephemeral
-per-connection state, not a durable fact worth a row and a migration, and it needs to disappear
-the instant a socket drops. A `presence:update` broadcast follows any change, whether that's a
-connect/disconnect or an editing-start/stop.
+Присутствие намеренно не хранится в PostgreSQL. Оно живёт только в памяти процесса gateway с ключами
+`listId → userId → { online, editingTaskId }`. Это по природе эфемерное состояние отдельного соединения, а не
+долговечный факт, ради которого стоило бы заводить строку и миграцию, и оно должно исчезать в тот же момент,
+когда сокет отваливается. После любого изменения, будь то подключение/отключение или начало/конец
+редактирования, рассылается `presence:update`.
 
-The client debounces outgoing `presence:editing:start/stop` events so that typing doesn't spam
-the socket. The server tracks each client's last-sent editing target so a stale, delayed "stop
-editing A" arriving after a newer "start editing B" can't clobber the current state.
+Клиент применяет debounce к исходящим событиям `presence:editing:start/stop`, чтобы набор текста не засыпал
+сокет сообщениями. Сервер запоминает последнюю отправленную каждым клиентом цель редактирования, поэтому
+устаревшее запоздавшее "stop editing A", пришедшее после более нового "start editing B", не затрёт текущее
+состояние.
 
-## Conflict handling
+## Обработка конфликтов
 
-The client's wall clock is never trusted as an ordering signal, because clock skew between two
-browsers makes "the newer timestamp wins" unsafe. Every conflict check instead runs against
-server-ordered state, using `Task.version` (and, for reordering, `Task.position`) as the single
-ordering authority.
+Системным часам клиента никогда не доверяют как признаку порядка: из-за расхождения часов у двух браузеров
+правило "побеждает более новая метка времени" небезопасно. Вместо этого каждая проверка конфликта выполняется
+по состоянию, порядок которого задаёт сервер, а `Task.version` (и `Task.position` для перестановки) служит
+единственным источником порядка.
 
-### Concurrent edit
+### Одновременное редактирование
 
-The client sends the `Task.version` it last saw as `baseVersion`. The update is applied as a
-single conditional `UPDATE ... WHERE id = ? AND version = ?`: whichever request's `WHERE` matches
-first commits and bumps the version, and every later request against that same stale version no
-longer matches. The server then re-reads the row and returns `VERSION_CONFLICT` with the current
-task. This is a server-ordered last-write-wins: the database decides the order, not either
-client, and the conflict is detected atomically inside the write itself rather than by a separate
-check-then-write step that a second request could race through.
+Клиент отправляет последнюю виденную им `Task.version` как `baseVersion`. Обновление выполняется одним условным
+`UPDATE ... WHERE id = ? AND version = ?`: тот запрос, чей `WHERE` совпадёт первым, фиксирует изменение и
+увеличивает версию, а все последующие запросы с той же устаревшей версией уже не совпадают. Тогда сервер заново
+читает строку и возвращает `VERSION_CONFLICT` с текущей задачей. Это last-write-wins с порядком от сервера:
+порядок определяет база данных, а не какой-либо клиент, и конфликт обнаруживается атомарно внутри самой записи,
+а не отдельным шагом "проверить, потом записать", в который мог бы проскочить второй запрос.
 
-### Delete vs. edit
+### Удаление и редактирование
 
-If user A is editing a task (tracked via presence) and user B tries to delete it without
-confirmation, the server responds with `conflict:warning` (`CONFIRMATION_REQUIRED`) instead of
-deleting. The same applies to deleting a completed task. Resending the delete with `force: true`
-re-validates from scratch: existence, permissions, completed status, current version, rather
-than trusting the earlier check, since state may have changed again in between.
+Если пользователь A редактирует задачу (это отслеживается через присутствие), а пользователь B пытается её
+удалить без подтверждения, сервер вместо удаления отвечает `conflict:warning` (`CONFIRMATION_REQUIRED`). То же
+относится к удалению завершённой задачи. Повторная отправка удаления с `force: true` заново проверяет всё с
+нуля: существование, права, статус завершения, текущую версию, а не полагается на прежнюю проверку, так как
+состояние могло снова измениться.
 
-A completed task can only ever be deleted by an admin, with `force: true` required. A member
-cannot bypass this rule regardless of confirmation.
+Завершённую задачу может удалить только админ, и обязательно с `force: true`. Участник не может обойти это
+правило, даже с подтверждением.
 
-### Concurrent reorder
+### Одновременная перестановка
 
-Positions are fractional-index strings (inserting between `A` and `M` produces something like
-`G`), not integers, so a reorder never requires renumbering other rows. Reordering the same list
-from two clients at once is additionally serialized by a Postgres transaction-scoped advisory
-lock (`pg_advisory_xact_lock`, keyed by a hash of the list id). The lock lives in the database, so
-it correctly orders position-affecting writes across any number of backend processes, not just
-within one. Two inserts anchored at the same single-sided neighbor can legitimately compute an
-identical fractional key. Task lists are always read back ordered by `(position, id)`, which
-gives every client the same deterministic tie-break and the same final order.
+Позиции это строки fractional index (вставка между `A` и `M` даёт что-то вроде `G`), а не целые числа, поэтому
+перестановка никогда не требует перенумеровывать другие строки. Одновременная перестановка в одном списке с двух
+клиентов дополнительно сериализуется advisory-блокировкой Postgres уровня транзакции (`pg_advisory_xact_lock`,
+ключ получен хешем id списка). Блокировка живёт в базе данных, поэтому она корректно упорядочивает записи,
+влияющие на позиции, при любом числе процессов backend, а не только внутри одного. Две вставки, привязанные к
+одному и тому же односторонному соседу, могут законно вычислить одинаковый fractional-ключ. Списки задач всегда
+читаются с сортировкой по `(position, id)`, что даёт всем клиентам один и тот же детерминированный разрешающий
+порядок и один и тот же итоговый результат.
 
-## Idempotency
+## Идемпотентность
 
-Every WebSocket mutation accepts an optional client-generated `operationId`. The result of the
-first successful attempt is stored in `OperationIdempotencyRecord`, keyed by `(userId,
-operationId)`. Replaying the same `operationId`, whether that's a client that never saw the ack
-because of a dropped connection or the offline queue replaying after a reconnect, returns the
-cached result instead of re-applying the mutation. The record lives in Postgres rather than
-process memory, so a replay is deduped correctly no matter which backend instance ends up
-handling it.
+Каждая мутация по WebSocket принимает необязательный сгенерированный клиентом `operationId`. Результат первой
+успешной попытки сохраняется в `OperationIdempotencyRecord` с ключом `(userId,
+operationId)`. Повтор с тем же `operationId`, будь то клиент, который не получил ack из-за обрыва соединения,
+или офлайн-очередь, воспроизводящая операции после переподключения, возвращает кэшированный результат, а не
+применяет мутацию заново. Запись хранится в Postgres, а не в памяти процесса, поэтому повтор корректно
+дедуплицируется независимо от того, какой экземпляр backend его обработает.
 
-Idempotency is a WebSocket-level concern: the REST endpoints don't take an `operationId`, since
-the offline queue always replays over the WebSocket connection once it's back up.
+Идемпотентность относится только к уровню WebSocket: REST-эндпоинты не принимают `operationId`, так как
+офлайн-очередь после восстановления связи всегда воспроизводит операции по WebSocket-соединению.
 
-## Offline mode
+## Офлайн-режим
 
-The frontend queues every mutation (create/update/delete/reorder) through the same code path
-whether the socket is connected or not. An "online" action just drains its queue immediately.
-Each queued operation carries the `operationId` idempotency key described above.
+Frontend пропускает каждую мутацию (create/update/delete/reorder) через очередь по одному и тому же пути,
+подключён сокет или нет. В "онлайн"-случае очередь просто сразу опустошается. Каждая операция в очереди несёт
+ключ идемпотентности `operationId`, описанный выше.
 
-Flow: `connect → list:join → list:sync (reconcile) → replay pending operations, one at a time`.
-The queue is persisted to `localStorage` per list, so it survives a page reload while offline, not
-just a WebSocket reconnect. Replay is a single attempt per operation; nothing is retried forever:
+Порядок: `connect → list:join → list:sync (reconcile) → replay pending operations, one at a time`.
+Очередь сохраняется в `localStorage` отдельно для каждого списка, поэтому она переживает перезагрузку страницы
+в офлайне, а не только переподключение WebSocket. Воспроизведение делается одной попыткой на операцию, ничего
+не повторяется бесконечно:
 
-- a stale `baseVersion` on replay surfaces the same conflict UI as a live edit conflict;
-- a replayed operation targeting a task deleted in the meantime fails with 404, which the client
-  treats as "drop the change, don't resurrect the task" (for a queued delete of an
-  already-deleted task, 404 is instead treated as success, since the goal was already achieved);
-- a delete blocked by `CONFIRMATION_REQUIRED` (completed task, or being edited; offline clients
-  can't know live presence) is dropped from auto-replay and surfaced for the user to retry
-  manually, rather than auto-forcing it through.
+- устаревший `baseVersion` при воспроизведении показывает тот же интерфейс конфликта, что и живой конфликт
+  правки;
+- воспроизведённая операция над задачей, которую тем временем удалили, завершается ошибкой 404, и клиент
+  понимает это как "отбросить изменение, не воскрешать задачу" (для отложенного удаления уже удалённой задачи
+  404, наоборот, считается успехом, так как цель уже достигнута);
+- удаление, заблокированное `CONFIRMATION_REQUIRED` (завершённая задача или задача в редактировании; офлайн-
+  клиенты не знают о текущем присутствии), исключается из автоматического воспроизведения и показывается
+  пользователю для ручного повтора, а не проталкивается принудительно.
 
-## Permissions
+## Права доступа
 
-- Only a member of a list can read or write its tasks. This is enforced server-side on every REST
-  and WebSocket entry point, not just hidden in the UI.
-- An admin (the list's owner, or a member invited with the `ADMIN` role) can delete any task.
-- A member can delete only tasks they created themselves.
-- A completed task can't be deleted the normal way; only an admin can, and only with `force: true`.
+- Читать и изменять задачи списка может только его участник. Это проверяется на сервере в каждой точке входа
+  REST и WebSocket, а не просто скрывается в интерфейсе.
+- Админ (владелец списка или участник, приглашённый с ролью `ADMIN`) может удалить любую задачу.
+- Участник может удалять только созданные им самим задачи.
+- Завершённую задачу нельзя удалить обычным способом; это может сделать только админ и только с `force: true`.
 
-## Testing
+## Тестирование
 
-- **Unit/integration** (`backend/src/**/*.spec.ts`): `TasksService` against a real Postgres,
-  covering concurrent update/delete, stale `baseVersion`, permissions (member vs admin,
-  completed-task rules), delete-vs-active-editing, operation idempotency (create/update/delete/
-  reorder replay), and reorder including concurrent reorders onto the same anchor. Plus
-  `PresenceService` (pure) and `RealtimeGateway` (stale presence-stop guard, `operationId`
-  echoing).
-- **E2E** (`backend/test/**/*.e2e-spec.ts`): a real Nest HTTP+WebSocket server with two independent
-  `socket.io-client` connections, covering realtime create/update/delete/presence between two
-  clients, reconnect and reconciliation, replay idempotency, invalid/stale replayed operations,
-  and no resurrection of deleted tasks. Plus REST auth/list/invite/task flows and permission
-  checks.
-- **Frontend** (`frontend/src/**/*.test.{ts,tsx}`, Vitest): the offline queue's coalescing rules,
-  task-list sort/merge helpers, and a connection-status component test.
+- **Unit/integration** (`backend/src/**/*.spec.ts`): `TasksService` на реальном Postgres, с покрытием
+  конкурентных update/delete, устаревшего `baseVersion`, прав (участник и админ, правила для завершённых задач),
+  удаления во время активного редактирования, идемпотентности операций (повтор create/update/delete/reorder) и
+  перестановки, включая одновременные перестановки к одному и тому же якорю. Также `PresenceService` (чистый) и
+  `RealtimeGateway` (защита от устаревшего presence-stop, возврат `operationId` в ответе).
+- **E2E** (`backend/test/**/*.e2e-spec.ts`): настоящий HTTP+WebSocket-сервер Nest с двумя независимыми
+  соединениями `socket.io-client`, покрывающий create/update/delete/presence в реальном времени между двумя
+  клиентами, переподключение и согласование состояния, идемпотентность повторов, недействительные и устаревшие
+  воспроизведённые операции и отсутствие воскрешения удалённых задач. Также REST-сценарии аутентификации,
+  списков, приглашений и задач и проверки прав.
+- **Frontend** (`frontend/src/**/*.test.{ts,tsx}`, Vitest): правила слияния офлайн-очереди, вспомогательные
+  функции сортировки и слияния списка задач и тест компонента статуса соединения.
 
-Backend tests need a dedicated test database, kept separate from the dev database so tests never
-touch seeded demo data:
+Для тестов backend нужна отдельная тестовая база данных, не совпадающая с базой для разработки, чтобы тесты
+никогда не трогали демо-данные из seed:
 
 ```
 docker exec collaborative-todo-postgres psql -U todo -d collaborative_todo -c "CREATE DATABASE collaborative_todo_test"
@@ -272,13 +273,13 @@ cd frontend
 npm test
 ```
 
-## Verification
+## Проверка
 
-Backend: `npm run lint:check`, `npm test`, `npm run test:e2e` in `backend/`. Frontend:
-`npm run lint`, `npm run typecheck`, `npm test`, `npm run build` in `frontend/`.
+Backend: `npm run lint:check`, `npm test`, `npm run test:e2e` в `backend/`. Frontend:
+`npm run lint`, `npm run typecheck`, `npm test`, `npm run build` в `frontend/`.
 
-To verify against a clean test database without touching dev data, drop and recreate only the
-test database rather than the Postgres container's volume:
+Чтобы проверить на чистой тестовой базе, не трогая данные для разработки, пересоздайте только тестовую базу, а
+не том контейнера Postgres:
 
 ```
 docker exec collaborative-todo-postgres psql -U todo -d collaborative_todo -c "DROP DATABASE IF EXISTS collaborative_todo_test"
@@ -288,27 +289,26 @@ DATABASE_URL="postgresql://todo:todo@localhost:5432/collaborative_todo_test?sche
 npm test && npm run test:e2e
 ```
 
-Beyond the automated suite, exercise the realtime paths manually with two browser sessions signed
-in as the two seeded users: create, update, delete and reorder a task in one and watch it appear
-in the other; edit the same task from both at once to see the conflict banner; drag-reorder from
-both at once; go offline in one tab (dev tools → offline), make changes, and reconnect to see the
-queue replay.
+Помимо автоматических тестов, проверьте пути реального времени вручную в двух браузерных сессиях, войдя под двумя
+тестовыми пользователями: создайте, измените, удалите и переставьте задачу в одной и посмотрите, как она
+появляется в другой; отредактируйте одну задачу из обеих сессий одновременно, чтобы увидеть баннер конфликта;
+перетащите задачи одновременно в обеих; отключитесь от сети в одной вкладке (dev tools → offline), внесите
+изменения и подключитесь снова, чтобы увидеть воспроизведение очереди.
 
-## Known limitations
+## Известные ограничения
 
-If a task is created while offline, the create succeeds server-side, and then the client edits
-that same task again before the connection round-trip completes and it learns the create already
-landed, that second edit can be lost. The cached idempotent replay returns the original create's
-result, not a merged one. This requires a specific partial-connectivity timing window and doesn't
-occur in the common fully-offline-then-reconnect case.
+Если задача создана в офлайне, создание выполнено на сервере, а затем клиент редактирует ту же задачу ещё раз до
+того, как завершится обмен с сервером и он узнает, что создание уже прошло, эта вторая правка может потеряться.
+Кэшированный идемпотентный повтор возвращает результат исходного создания, а не объединённый. Для этого нужно
+особое стечение обстоятельств при частичной связи, и в обычном случае "полностью офлайн, затем переподключение"
+это не возникает.
 
-Invite creation issues a shareable link rather than sending an email; there is no mail-sending
-integration in this project.
+Создание приглашения выдаёт ссылку, которой можно поделиться, а не отправляет письмо; интеграции с отправкой
+почты в проекте нет.
 
-## Future improvements
+## Планы по улучшению
 
-- Send invite links by email instead of requiring them to be copied and shared manually.
-- Move presence from a single gateway process's memory to a shared store (e.g. Redis) if the
-  backend needs to run as more than one instance. REST and DB-backed writes already scale across
-  instances via the Postgres advisory lock and idempotency table, but in-memory presence
-  currently does not.
+- Отправлять ссылки-приглашения по email, чтобы их не приходилось копировать и передавать вручную.
+- Перенести присутствие из памяти одного процесса gateway в общее хранилище (например, Redis), если backend
+  понадобится запускать в нескольких экземплярах. REST и записи в БД уже масштабируются на несколько
+  экземпляров благодаря advisory-блокировке Postgres и таблице идемпотентности, а присутствие в памяти пока нет.
